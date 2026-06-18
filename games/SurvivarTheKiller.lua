@@ -1,7 +1,8 @@
--- VuaN | Survive the Killer V1.3
+-- VuaN | Survive the Killer V1.4
 -- Support version v2.31.0
 
 -- Change log
+-- V1.4 - add ESP Exits, add Exit ESP, add Auto Escape, fix Teleport to Exit, improve Revive (Risky) as button
 -- V1.3 - UI redesign, add Killer Chance X3 (gamepass bypass)
 -- V1.2 - add Double Jump (gamepass bypass)
 -- V1.1 - add Auto revive self, Auto revive (risk method), update ESP logic
@@ -15,7 +16,7 @@ local StarterGui = game:GetService("StarterGui")
 
 local function notif(str, dur)
     StarterGui:SetCore("SendNotification", {
-        Title = "VSTK V1.3",
+        Title = "VSTK V1.4",
         Text = str,
         Duration = dur or 3
     })
@@ -27,7 +28,8 @@ local settings = {
     Noclip = false,
     DoubleJump = false,
     KillerChanceX3 = false,
-    ESP = true,
+    ESP = false,
+    ESPExits = false,
     NoFog = false,
     Fullbright = false,
     AutoLoot = false,
@@ -37,8 +39,9 @@ local settings = {
     AutoReviveLegit = false,
     AutoReviveRisky = false,
     AutoReviveSelf = false,
-    selfReviveCooldown = 3,
-    selfReviveMode = "Random"
+    selfReviveCooldown = 5,
+    selfReviveMode = "Random",
+    AutoEscape = false
 }
 
 local flyConnection = nil
@@ -49,18 +52,30 @@ local killAuraConnection = nil
 local reviveLegitConnection = nil
 local reviveRiskyConnection = nil
 local selfReviveConnection = nil
+local autoEscapeConnection = nil
 local espObjects = {}
+local espExitObjects = {}
 local savedHomePosition = nil
 local isReviving = false
 local lastSelfReviveTime = 0
 local espCache = {}
 local CurrentTab = "About"
+local lastEscapeTime = 0
 
 local function pressF()
     local vim = game:GetService("VirtualInputManager")
     vim:SendKeyEvent(true, Enum.KeyCode.F, false, game)
     task.wait(0.1)
     vim:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+end
+
+local function FindMap()
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:FindFirstChild("LootSpawns") or child:FindFirstChild("ExitGateways") or child:FindFirstChild("Exits") then
+            return child
+        end
+    end
+    return nil
 end
 
 local h = Instance.new("ScreenGui")
@@ -364,7 +379,6 @@ local function ClearRightContent()
     end
 end
 
-
 -- Gamepass Bypass
 local function SetSettingsAttribute(name, value)
     if not lp then return end
@@ -382,12 +396,12 @@ local function UpdateDoubleJump()
     SetSettingsAttribute("double_jump", settings.DoubleJump)
 end
 
--- KILLER CHANCE X3
+-- KILLER CHANCE
 local function UpdateKillerChance()
     SetSettingsAttribute("killer_chance_3x", settings.KillerChanceX3)
 end
 
--- ESP
+-- ESP PLAYERS
 local function GetPlayerTeamColor(player)
     if player.Team then
         return player.Team.TeamColor.Color
@@ -450,11 +464,62 @@ local function UpdateESP()
     end
 end
 
+-- ESP EXITS
+local function UpdateESPExits()
+    for _, obj in pairs(espExitObjects) do
+        if obj and obj.Parent then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+    espExitObjects = {}
+    
+    if not settings.ESPExits then return end
+    
+    local map = FindMap()
+    if not map then return end
+    
+    local exitsFolder = map:FindFirstChild("Exits")
+    if not exitsFolder then return end
+    
+    for _, gateway in ipairs(exitsFolder:GetChildren()) do
+        if gateway.Name == "ExitGateway" then
+            local doorway = gateway:FindFirstChild("Doorway")
+            if doorway then
+                local frameFolder = doorway:FindFirstChild("Frame")
+                if frameFolder then
+                    for _, part in ipairs(frameFolder:GetChildren()) do
+                        if part:IsA("BasePart") then
+                            local highlight = Instance.new("Highlight")
+                            highlight.Adornee = part
+                            highlight.FillColor = Color3.fromRGB(50, 255, 50)
+                            highlight.FillTransparency = 0.5
+                            highlight.OutlineColor = Color3.fromRGB(50, 255, 50)
+                            highlight.OutlineTransparency = 0.2
+                            highlight.Parent = part
+                            table.insert(espExitObjects, highlight)
+                        end
+                    end
+                    
+                    local folderHighlight = Instance.new("Highlight")
+                    folderHighlight.Adornee = frameFolder
+                    folderHighlight.FillColor = Color3.fromRGB(50, 255, 50)
+                    folderHighlight.FillTransparency = 0.2
+                    folderHighlight.OutlineColor = Color3.fromRGB(50, 255, 50)
+                    folderHighlight.OutlineTransparency = 0.5
+                    folderHighlight.Parent = frameFolder
+                    table.insert(espExitObjects, folderHighlight)
+                end
+            end
+        end
+    end
+end
+
 local lastESPUpdate = 0
 local function PeriodicESPUpdate()
     if tick() - lastESPUpdate >= 0.5 then
         lastESPUpdate = tick()
         UpdateESP()
+        UpdateESPExits()
     end
 end
 
@@ -520,13 +585,7 @@ end
 
 -- AUTO LOOT
 local function AutoCollectLoot()
-    local map = nil
-    for _, child in ipairs(workspace:GetChildren()) do
-        if child:FindFirstChild("LootSpawns") then
-            map = child
-            break
-        end
-    end
+    local map = FindMap()
     if not map then return end
     local lootFolder = map:FindFirstChild("LootSpawns")
     if not lootFolder then return end
@@ -567,30 +626,70 @@ end
 
 -- TELEPORT TO EXIT
 local function TeleportToExit()
-    local exitTrigger = nil
+    local map = FindMap()
+    if not map then
+        for _, child in ipairs(workspace:GetChildren()) do
+            if child:FindFirstChild("Exits") or child:FindFirstChild("ExitGateways") then
+                map = child
+                break
+            end
+        end
+    end
+    if not map then
+        notif("Map not found!", 2)
+        return false
+    end
     
-    for _, child in ipairs(workspace:GetChildren()) do
-        local exits = child:FindFirstChild("ExitGateways")
-        if exits then
-            for _, gateway in ipairs(exits:GetChildren()) do
+    local exitPosition = nil
+    
+    local exitsFolder = map:FindFirstChild("Exits")
+    if exitsFolder then
+        for _, gateway in ipairs(exitsFolder:GetChildren()) do
+            if gateway.Name == "ExitGateway" then
                 local trigger = gateway:FindFirstChild("Trigger")
                 if trigger and trigger:IsA("BasePart") then
-                    exitTrigger = trigger
+                    exitPosition = trigger.Position
                     break
                 end
             end
         end
-        if exitTrigger then break end
     end
     
-    if not exitTrigger then
-        notif("Exit not found", 2)
-        return
+    if not exitPosition then
+        local exits = map:FindFirstChild("ExitGateways")
+        if exits then
+            for _, gateway in ipairs(exits:GetChildren()) do
+                local trigger = gateway:FindFirstChild("Trigger")
+                if trigger and trigger:IsA("BasePart") then
+                    exitPosition = trigger.Position
+                    break
+                end
+            end
+        end
+    end
+    
+    if not exitPosition then
+        for _, child in ipairs(workspace:GetChildren()) do
+            local trigger = child:FindFirstChild("Trigger")
+            if trigger and trigger:IsA("BasePart") then
+                exitPosition = trigger.Position
+                break
+            end
+        end
+    end
+    
+    if not exitPosition then
+        notif("Exit not found!", 2)
+        return false
     end
     
     if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
-        lp.Character.HumanoidRootPart.CFrame = CFrame.new(exitTrigger.Position + Vector3.new(0, 3, 0))
-        notif("Teleported to exit", 2)
+        lp.Character.HumanoidRootPart.CFrame = CFrame.new(exitPosition + Vector3.new(0, 3, 0))
+        notif("Teleported to exit!", 2)
+        return true
+    else
+        notif("Character not found!", 2)
+        return false
     end
 end
 
@@ -713,8 +812,7 @@ local function AutoReviveLegitLoop()
                 local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
                 if bleedOut and bleedOut.Enabled then
                     local dist = (rootPart.Position - lp.Character.HumanoidRootPart.Position).Magnitude
-                    if dist < minDist then
-                        minDist = dist
+                    if dist < minDist then                        minDist = dist
                         closest = {player = player, rootPart = rootPart, bleedOut = bleedOut}
                     end
                 end
@@ -775,18 +873,24 @@ local function AutoReviveLegitLoop()
 end
 
 -- AUTO REVIVE (RISKY)
-local function AutoReviveRiskyLoop()
-    if not settings.AutoReviveRisky then return end
+local function AutoReviveRiskyOneUse()
     if isReviving then return end
-    if not lp.Character or not lp.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not lp.Character or not lp.Character:FindFirstChild("HumanoidRootPart") then 
+        notif("You need a character!", 2)
+        return 
+    end
     
     local myRoot = lp.Character.HumanoidRootPart
     local myBleedOut = myRoot:FindFirstChild("BleedOutHealth")
-    if myBleedOut and myBleedOut.Enabled then return end
+    if myBleedOut and myBleedOut.Enabled then
+        notif("You are downed! Can't revive others.", 2)
+        return
+    end
     
     if lp.Team then
         local teamName = lp.Team.Name:lower()
         if teamName == "lobby" or teamName == "spectator" or lp.Team.TeamColor == BrickColor.new("White") then
+            notif("You are in lobby!", 2)
             return
         end
     end
@@ -800,69 +904,93 @@ local function AutoReviveRiskyLoop()
             if rootPart then
                 local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
                 if bleedOut and bleedOut.Enabled then
-                    local dist = (rootPart.Position - lp.Character.HumanoidRootPart.Position).Magnitude
-                    if dist < minDist then
-                        minDist = dist
-                        closest = {player = player, rootPart = rootPart, bleedOut = bleedOut}
+                    if not (player.Team and (player.Team.Name:lower() == "lobby" or player.Team.TeamColor == BrickColor.new("White"))) then
+                        local dist = (rootPart.Position - lp.Character.HumanoidRootPart.Position).Magnitude
+                        if dist < minDist then
+                            minDist = dist
+                            closest = {player = player, rootPart = rootPart, bleedOut = bleedOut}
+                        end
                     end
                 end
             end
         end
     end
     
-    if closest then
-        if isKillerNearby(closest.rootPart.Position, 15) then
-            return
-        end
-        
-        isReviving = true
-        local myHomePos = lp.Character.HumanoidRootPart.CFrame
-        
-        local wasFlying = settings.Fly
-        local wasNoclip = settings.Noclip
-        if wasFlying then settings.Fly = false; UpdateFly() end
-        if wasNoclip then settings.Noclip = false; if noclipConnection then noclipConnection:Disconnect(); noclipConnection = nil end end
-        
-        local forward = closest.rootPart.CFrame.LookVector
-        lp.Character.HumanoidRootPart.CFrame = closest.rootPart.CFrame + (forward * 2)
-        task.wait(0.2)
-        
-        notif("RISKY Revive: picking up " .. closest.player.Name, 2)
-        
-        pressF()
-        task.wait(0.3)
-        
-        if savedHomePosition then
-            lp.Character.HumanoidRootPart.CFrame = savedHomePosition + Vector3.new(0, 0, 3)
-        else
-            lp.Character.HumanoidRootPart.CFrame = myHomePos
-        end
-        task.wait(0.3)
-        
-        pressF()
-        task.wait(0.2)
-        
-        notif("RISKY Revive completed for " .. closest.player.Name, 2)
-        
-        if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
-            lp.Character.HumanoidRootPart.CFrame = myHomePos
-            notif("Returned to home", 2)
-        end
-        
-        if wasFlying then settings.Fly = true; UpdateFly() end
-        if wasNoclip then settings.Noclip = true; 
-            if noclipConnection then noclipConnection:Disconnect() end
-            noclipConnection = RunService.Stepped:Connect(function()
-                if settings.Noclip and lp.Character then
-                    for _, part in pairs(lp.Character:GetDescendants()) do
-                        if part:IsA("BasePart") then part.CanCollide = false end
-                    end
-                end
-            end)
-        end
-        
-        isReviving = false
+    if not closest then
+        notif("No downed players found!", 2)
+        return
     end
+    
+    local killerNearby = false
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        if player ~= lp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local isKiller = (player.Team and player.Team.TeamColor == BrickColor.new("Really red")) or false
+            if isKiller then
+                local dist = (player.Character.HumanoidRootPart.Position - closest.rootPart.Position).Magnitude
+                if dist <= 15 then
+                    killerNearby = true
+                    break
+                end
+            end
+        end
+    end
+    
+    if killerNearby then
+        notif("Killer nearby! Risky revive cancelled.", 2)
+        return
+    end
+    
+    isReviving = true
+    local myHomePos = lp.Character.HumanoidRootPart.CFrame
+    
+    local wasFlying = settings.Fly
+    local wasNoclip = settings.Noclip
+    if wasFlying then settings.Fly = false; UpdateFly() end
+    if wasNoclip then 
+        settings.Noclip = false
+        if noclipConnection then noclipConnection:Disconnect(); noclipConnection = nil end
+    end
+    
+    local forward = closest.rootPart.CFrame.LookVector
+    lp.Character.HumanoidRootPart.CFrame = closest.rootPart.CFrame + (forward * 2)
+    task.wait(0.2)
+    
+    notif("RISKY Revive: picking up " .. closest.player.Name, 2)
+    
+    pressF()
+    task.wait(0.3)
+    
+    if savedHomePosition then
+        lp.Character.HumanoidRootPart.CFrame = savedHomePosition + Vector3.new(0, 0, 3)
+    else
+        lp.Character.HumanoidRootPart.CFrame = myHomePos
+    end
+    task.wait(0.3)
+    
+    pressF()
+    task.wait(0.2)
+    
+    notif("RISKY Revive completed for " .. closest.player.Name, 2)
+    
+    if lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
+        lp.Character.HumanoidRootPart.CFrame = myHomePos
+        notif("Returned to home", 2)
+    end
+    
+    if wasFlying then settings.Fly = true; UpdateFly() end
+    if wasNoclip then 
+        settings.Noclip = true
+        if noclipConnection then noclipConnection:Disconnect() end
+        noclipConnection = RunService.Stepped:Connect(function()
+            if settings.Noclip and lp.Character then
+                for _, part in pairs(lp.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+            end
+        end)
+    end
+    
+    isReviving = false
 end
 
 -- AUTO REVIVE (SELF)
@@ -872,6 +1000,11 @@ local function IsPlayerDowned(player)
     if not rootPart then return false end
     local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
     return bleedOut and bleedOut.Enabled
+end
+
+local function IsPlayerInLobby(player)
+    if not player or not player.Team then return false end
+    return player.Team.Name:lower() == "lobby" or player.Team.TeamColor == BrickColor.new("White")
 end
 
 local function AutoReviveSelfLoop()
@@ -890,7 +1023,7 @@ local function AutoReviveSelfLoop()
             for _, player in ipairs(game.Players:GetPlayers()) do
                 if player ~= lp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                     local isKiller = (player.Team and player.Team.TeamColor == BrickColor.new("Really red")) or false
-                    if not isKiller and not IsPlayerDowned(player) then
+                    if not isKiller and not IsPlayerInLobby(player) and not IsPlayerDowned(player) then
                         local dist = (player.Character.HumanoidRootPart.Position - myPos).Magnitude
                         if dist > farthestDist then
                             farthestDist = dist
@@ -904,7 +1037,7 @@ local function AutoReviveSelfLoop()
             for _, player in ipairs(game.Players:GetPlayers()) do
                 if player ~= lp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                     local isKiller = (player.Team and player.Team.TeamColor == BrickColor.new("Really red")) or false
-                    if not isKiller and not IsPlayerDowned(player) then
+                    if not isKiller and not IsPlayerInLobby(player) and not IsPlayerDowned(player) then
                         table.insert(survivors, player.Character.HumanoidRootPart)
                     end
                 end
@@ -925,6 +1058,60 @@ local function AutoReviveSelfLoop()
         else
             notif("Self Revive: no valid target found", 2)
         end
+    end
+end
+
+-- AUTO ESCAPE
+local function CheckTimerColors()
+    local playerGui = lp:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+    
+    local topBar = playerGui:FindFirstChild("TopBar")
+    if not topBar then return false end
+    
+    local roundTimer = topBar:FindFirstChild("RoundTimer")
+    if not roundTimer then return false end
+    
+    local extra = roundTimer:FindFirstChild("Extra")
+    if not extra then return false end
+    
+    local gradient = extra:FindFirstChild("Gradient")
+    if not gradient then return false end
+    
+    local uiGradient = gradient:FindFirstChild("UIGradient")
+    if not uiGradient then
+        uiGradient = gradient:FindFirstChild("UI Gradient")
+    end
+    if not uiGradient then return false end
+    
+    local color = uiGradient.Color
+    if not color then return false end
+    
+    if color.Keypoints then
+        for _, keypoint in ipairs(color.Keypoints) do
+            local c = keypoint.Value
+            local r = math.round(c.R * 10) / 10
+            local g = math.round(c.G * 10) / 10
+            local b = math.round(c.B * 10) / 10
+            
+            if not (r == 0 and g == 0 and b == 0) then
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+local function AutoEscapeLoop()
+    if not settings.AutoEscape then return end
+    if not lp.Character or not lp.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    if tick() - lastEscapeTime < 1 then return end
+    
+    if CheckTimerColors() then
+        TeleportToExit()
+        lastEscapeTime = tick()
     end
 end
 
@@ -961,7 +1148,7 @@ function UpdateRightContent()
         local titleLabel = CreateLabel(scrollFrame, "VuaN | Survive the Killer", Color3.fromRGB(224, 58, 58))
         titleLabel.TextSize = 16; titleLabel.Font = Enum.Font.GothamBlack
         
-        local versionLabel = CreateLabel(scrollFrame, "Version 1.3", Color3.fromRGB(150, 150, 170))
+        local versionLabel = CreateLabel(scrollFrame, "Version 1.4", Color3.fromRGB(150, 150, 170))
         versionLabel.TextSize = 10; versionLabel.Font = Enum.Font.Gotham
         
         CreateLabel(scrollFrame, "", Color3.fromRGB(50,50,50))
@@ -970,10 +1157,10 @@ function UpdateRightContent()
         changesHeader.TextSize = 12; changesHeader.Font = Enum.Font.GothamBold
         
         local changes = {
-            "V1.3 - UI redesign (About, Player, World, Revive)",
-            "V1.3 - Added Killer Chance X3 (gamepass bypass)",
-            "V1.2 - Added Double Jump (gamepass bypass)",
-            "V1.1 - Added Auto Revive (Legit, Risky, Self)",
+            "V1.4 - Added Auto Escape and ESP Exits",
+            "V1.3 - UI redesign, Killer Chance X3 (gamepass bypass)",
+            "V1.2 - Double Jump (gamepass bypass)",
+            "V1.1 - Auto Revive (Legit, Risky, Self)",
             "V1 - Initial release"
         }
         for _, line in ipairs(changes) do
@@ -1026,8 +1213,18 @@ function UpdateRightContent()
             end
         end)
         
+        CreateToggle(scrollFrame, "Auto Escape", settings.AutoEscape, function(val)
+            settings.AutoEscape = val
+            if val then
+                if autoEscapeConnection then autoEscapeConnection:Disconnect() end
+                autoEscapeConnection = RunService.Heartbeat:Connect(AutoEscapeLoop)
+            else
+                if autoEscapeConnection then autoEscapeConnection:Disconnect(); autoEscapeConnection = nil end
+            end
+        end)
+        
         CreateLabel(scrollFrame, "", Color3.fromRGB(50,50,50))
-        CreateLabel(scrollFrame, "GAMEPASS BYPASS ", Color3.fromRGB(224, 58, 58))
+        CreateLabel(scrollFrame, "GAMEPASS BYPASS", Color3.fromRGB(224, 58, 58))
         
         CreateToggle(scrollFrame, "Double Jump", settings.DoubleJump, function(val)
             settings.DoubleJump = val
@@ -1075,6 +1272,11 @@ function UpdateRightContent()
             settings.ESP = val
             espCache = {}
             UpdateESP()
+        end)
+
+        CreateToggle(scrollFrame, "ESP Exits", settings.ESPExits, function(val)
+            settings.ESPExits = val
+            UpdateESPExits()
         end)
         
         CreateToggle(scrollFrame, "No Fog", settings.NoFog, function(val)
@@ -1138,14 +1340,8 @@ function UpdateRightContent()
             end
         end)
         
-        CreateToggle(scrollFrame, "Auto Revive (Risky) - PC only", settings.AutoReviveRisky, function(val)
-            settings.AutoReviveRisky = val
-            if val then
-                if reviveRiskyConnection then reviveRiskyConnection:Disconnect() end
-                reviveRiskyConnection = RunService.Heartbeat:Connect(AutoReviveRiskyLoop)
-            else
-                if reviveRiskyConnection then reviveRiskyConnection:Disconnect(); reviveRiskyConnection = nil end
-            end
+        CreateButton(scrollFrame, "Revive (Risky) - One Use", function()
+            AutoReviveRiskyOneUse()
         end)
         
         CreateLabel(scrollFrame, "", Color3.fromRGB(50,50,50))
@@ -1177,6 +1373,18 @@ end
 
 local updateConnection = RunService.Stepped:Connect(PeriodicUpdates)
 
+workspace.DescendantAdded:Connect(function(descendant)
+    if descendant.Name == "ExitGateways" or descendant.Name == "Doorway" or descendant.Name == "Frame" then
+        task.wait(0.5)
+        UpdateESPExits()
+    end
+end)
+
+workspace.DescendantRemoved:Connect(function()
+    task.wait(0.5)
+    UpdateESPExits()
+end)
+
 lp.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     if settings.speedEnabled and char:FindFirstChild("Humanoid") then
@@ -1189,8 +1397,9 @@ lp.CharacterAdded:Connect(function(char)
 end)
 
 UpdateESP()
+UpdateESPExits()
 UpdateDoubleJump()
 UpdateKillerChance()
 UpdateRightContent()
 
-notif("VSTK V1.3 loaded!", 3)
+notif("VSTK V1.4", 3)
