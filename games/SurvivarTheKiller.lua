@@ -2,10 +2,10 @@
 -- Support version v2.31.0
 
 -- Change log
--- V1.4 - add ESP Exits, add Exit ESP, add Auto Escape, fix Teleport to Exit, improve Revive (Risky) as button
+-- V1.4 - Add ESP Exits, add Auto Escape, fix Teleport to Exit
 -- V1.3 - UI redesign, add Killer Chance X3 (gamepass bypass)
 -- V1.2 - add Double Jump (gamepass bypass)
--- V1.1 - add Auto revive self, Auto revive (risk method), update ESP logic
+-- V1.1 - add Auto revive self, Auto revive (risk), update ESP logic
 -- V1 - release
 
 local lp = game:FindService("Players").LocalPlayer
@@ -24,6 +24,7 @@ end
 
 local settings = {
     Speed = 16, speedEnabled = false,
+    speedDisableOnDown = true,
     Fly = false, flySpeed = 50,
     Noclip = false,
     DoubleJump = false,
@@ -53,6 +54,7 @@ local reviveLegitConnection = nil
 local reviveRiskyConnection = nil
 local selfReviveConnection = nil
 local autoEscapeConnection = nil
+local noFogConnection = nil
 local espObjects = {}
 local espExitObjects = {}
 local savedHomePosition = nil
@@ -61,6 +63,7 @@ local lastSelfReviveTime = 0
 local espCache = {}
 local CurrentTab = "About"
 local lastEscapeTime = 0
+local timerActive = false
 
 local function pressF()
     local vim = game:GetService("VirtualInputManager")
@@ -76,6 +79,24 @@ local function FindMap()
         end
     end
     return nil
+end
+
+local function IsSurvivor()
+    if not lp.Team then return false end
+    local teamName = lp.Team.Name:lower()
+    if teamName == "lobby" or teamName == "spectator" or lp.Team.TeamColor == BrickColor.new("White") then
+        return false
+    end
+    local isKiller = (lp.Team and lp.Team.TeamColor == BrickColor.new("Really red")) or false
+    return not isKiller
+end
+
+local function IsPlayerDowned(player)
+    if not player or not player.Character then return false end
+    local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return false end
+    local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
+    return bleedOut and bleedOut.Enabled
 end
 
 local h = Instance.new("ScreenGui")
@@ -161,7 +182,7 @@ for i, item in ipairs(MenuItems) do
     btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
     btn.BackgroundTransparency = 0.5
     btn.BorderSizePixel = 0
-    btn.Position = UDim2.new(0.05, 0, 0.03 + ((i-1) * 0.13), 0)
+    btn.Position = UDim2.new(0.05, 0, 0.03 + ((i-1) * 0.1), 0)
     btn.Size = UDim2.new(0, 80, 0, 30)
     btn.Font = Enum.Font.GothamBold
     btn.Text = item
@@ -396,7 +417,7 @@ local function UpdateDoubleJump()
     SetSettingsAttribute("double_jump", settings.DoubleJump)
 end
 
--- KILLER CHANCE
+-- KILLER CHANCE X3
 local function UpdateKillerChance()
     SetSettingsAttribute("killer_chance_3x", settings.KillerChanceX3)
 end
@@ -479,36 +500,75 @@ local function UpdateESPExits()
     if not map then return end
     
     local exitsFolder = map:FindFirstChild("Exits")
-    if not exitsFolder then return end
+    if not exitsFolder then
+        exitsFolder = map:FindFirstChild("ExitGateways")
+        if not exitsFolder then return end
+    end
     
-    for _, gateway in ipairs(exitsFolder:GetChildren()) do
-        if gateway.Name == "ExitGateway" then
-            local doorway = gateway:FindFirstChild("Doorway")
-            if doorway then
-                local frameFolder = doorway:FindFirstChild("Frame")
-                if frameFolder then
-                    for _, part in ipairs(frameFolder:GetChildren()) do
-                        if part:IsA("BasePart") then
-                            local highlight = Instance.new("Highlight")
-                            highlight.Adornee = part
-                            highlight.FillColor = Color3.fromRGB(50, 255, 50)
-                            highlight.FillTransparency = 0.5
-                            highlight.OutlineColor = Color3.fromRGB(50, 255, 50)
-                            highlight.OutlineTransparency = 0.2
-                            highlight.Parent = part
-                            table.insert(espExitObjects, highlight)
+    local isTimerActive = false
+    local playerGui = lp:FindFirstChild("PlayerGui")
+    if playerGui then
+        local topBar = playerGui:FindFirstChild("TopBar")
+        if topBar then
+            local roundTimer = topBar:FindFirstChild("RoundTimer")
+            if roundTimer then
+                local extra = roundTimer:FindFirstChild("Extra")
+                if extra then
+                    local gradient = extra:FindFirstChild("Gradient")
+                    if gradient then
+                        local uiGradient = gradient:FindFirstChild("UIGradient")
+                        if not uiGradient then
+                            uiGradient = gradient:FindFirstChild("UI Gradient")
+                        end
+                        if uiGradient then
+                            local color = uiGradient.Color
+                            if color and color.Keypoints then
+                                for _, keypoint in ipairs(color.Keypoints) do
+                                    local c = keypoint.Value
+                                    local r = math.round(c.R * 10) / 10
+                                    local g = math.round(c.G * 10) / 10
+                                    local b = math.round(c.B * 10) / 10
+                                    if not (r == 0 and g == 0 and b == 0) then
+                                        isTimerActive = true
+                                        break
+                                    end
+                                end
+                            end
                         end
                     end
-                    
-                    local folderHighlight = Instance.new("Highlight")
-                    folderHighlight.Adornee = frameFolder
-                    folderHighlight.FillColor = Color3.fromRGB(50, 255, 50)
-                    folderHighlight.FillTransparency = 0.2
-                    folderHighlight.OutlineColor = Color3.fromRGB(50, 255, 50)
-                    folderHighlight.OutlineTransparency = 0.5
-                    folderHighlight.Parent = frameFolder
-                    table.insert(espExitObjects, folderHighlight)
                 end
+            end
+        end
+    end
+    
+    local fillColor = isTimerActive and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 165, 0)
+    local outlineColor = isTimerActive and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 140, 0)
+    
+    for _, gateway in ipairs(exitsFolder:GetChildren()) do
+        if gateway.Name == "ExitGateway" or gateway:IsA("Model") then
+            local doorway = gateway:FindFirstChild("Doorway")
+            if doorway then
+                for _, part in ipairs(doorway:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        local highlight = Instance.new("Highlight")
+                        highlight.Adornee = part
+                        highlight.FillColor = fillColor
+                        highlight.FillTransparency = 0.5
+                        highlight.OutlineColor = outlineColor
+                        highlight.OutlineTransparency = 0.2
+                        highlight.Parent = part
+                        table.insert(espExitObjects, highlight)
+                    end
+                end
+                
+                local doorwayHighlight = Instance.new("Highlight")
+                doorwayHighlight.Adornee = doorway
+                doorwayHighlight.FillColor = fillColor
+                doorwayHighlight.FillTransparency = 0.15
+                doorwayHighlight.OutlineColor = outlineColor
+                doorwayHighlight.OutlineTransparency = 0.5
+                doorwayHighlight.Parent = doorway
+                table.insert(espExitObjects, doorwayHighlight)
             end
         end
     end
@@ -812,7 +872,8 @@ local function AutoReviveLegitLoop()
                 local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
                 if bleedOut and bleedOut.Enabled then
                     local dist = (rootPart.Position - lp.Character.HumanoidRootPart.Position).Magnitude
-                    if dist < minDist then                        minDist = dist
+                    if dist < minDist then
+                        minDist = dist
                         closest = {player = player, rootPart = rootPart, bleedOut = bleedOut}
                     end
                 end
@@ -994,14 +1055,6 @@ local function AutoReviveRiskyOneUse()
 end
 
 -- AUTO REVIVE (SELF)
-local function IsPlayerDowned(player)
-    if not player or not player.Character then return false end
-    local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return false end
-    local bleedOut = rootPart:FindFirstChild("BleedOutHealth")
-    return bleedOut and bleedOut.Enabled
-end
-
 local function IsPlayerInLobby(player)
     if not player or not player.Team then return false end
     return player.Team.Name:lower() == "lobby" or player.Team.TeamColor == BrickColor.new("White")
@@ -1093,7 +1146,6 @@ local function CheckTimerColors()
             local r = math.round(c.R * 10) / 10
             local g = math.round(c.G * 10) / 10
             local b = math.round(c.B * 10) / 10
-            
             if not (r == 0 and g == 0 and b == 0) then
                 return true
             end
@@ -1107,11 +1159,38 @@ local function AutoEscapeLoop()
     if not settings.AutoEscape then return end
     if not lp.Character or not lp.Character:FindFirstChild("HumanoidRootPart") then return end
     
+    if not IsSurvivor() then return end
+    
     if tick() - lastEscapeTime < 1 then return end
     
-    if CheckTimerColors() then
+    local wasTimerActive = timerActive
+    timerActive = CheckTimerColors()
+    
+    if timerActive ~= wasTimerActive then
+        UpdateESPExits()
+    end
+    
+    if timerActive then
         TeleportToExit()
         lastEscapeTime = tick()
+    end
+end
+
+-- NO FOG
+local function UpdateNoFog()
+    if settings.NoFog then
+        if noFogConnection then noFogConnection:Disconnect() end
+        noFogConnection = RunService.Heartbeat:Connect(function()
+            if settings.NoFog then
+                Lighting.FogEnd = 100000
+                for _, v in pairs(Lighting:GetDescendants()) do 
+                    if v:IsA("Atmosphere") then v:Destroy() end 
+                end
+            end
+        end)
+    else
+        if noFogConnection then noFogConnection:Disconnect(); noFogConnection = nil end
+        Lighting.FogEnd = 1000
     end
 end
 
@@ -1120,7 +1199,11 @@ local function PeriodicUpdates()
     if tick() - lastUpdate >= 0.05 then
         lastUpdate = tick()
         if settings.speedEnabled and lp.Character and lp.Character:FindFirstChild("Humanoid") then
-            lp.Character.Humanoid.WalkSpeed = settings.Speed
+            if settings.speedDisableOnDown and IsPlayerDowned(lp) then
+                lp.Character.Humanoid.WalkSpeed = 16
+            else
+                lp.Character.Humanoid.WalkSpeed = settings.Speed
+            end
         end
     end
     PeriodicESPUpdate()
@@ -1157,11 +1240,13 @@ function UpdateRightContent()
         changesHeader.TextSize = 12; changesHeader.Font = Enum.Font.GothamBold
         
         local changes = {
-            "V1.4 - Added Auto Escape and ESP Exits",
+            "V1.4 - Added Auto Escape, Added Speed Disable On Down, Added ESP Exits",
+            "V1.4 - Fixed Teleport to Exit (now uses Trigger)",
+            "V1.4 - Improved Revive (Risky) as one-use button",
             "V1.3 - UI redesign, Killer Chance X3 (gamepass bypass)",
             "V1.2 - Double Jump (gamepass bypass)",
             "V1.1 - Auto Revive (Legit, Risky, Self)",
-            "V1 - Initial release"
+            "V1 - Release"
         }
         for _, line in ipairs(changes) do
             local l = CreateLabel(scrollFrame, "  • " .. line, Color3.fromRGB(180, 180, 200))
@@ -1187,6 +1272,10 @@ function UpdateRightContent()
             if settings.speedEnabled and lp.Character and lp.Character:FindFirstChild("Humanoid") then
                 lp.Character.Humanoid.WalkSpeed = val
             end
+        end)
+        
+        CreateToggle(scrollFrame, "Disable Speed On Down", settings.speedDisableOnDown, function(val)
+            settings.speedDisableOnDown = val
         end)
         
         CreateToggle(scrollFrame, "Fly", settings.Fly, function(val)
@@ -1281,12 +1370,7 @@ function UpdateRightContent()
         
         CreateToggle(scrollFrame, "No Fog", settings.NoFog, function(val)
             settings.NoFog = val
-            if val then
-                Lighting.FogEnd = 100000
-                for _, v in pairs(Lighting:GetDescendants()) do if v:IsA("Atmosphere") then v:Destroy() end end
-            else
-                Lighting.FogEnd = 1000
-            end
+            UpdateNoFog()
         end)
         
         CreateToggle(scrollFrame, "Fullbright", settings.Fullbright, function(val)
@@ -1396,10 +1480,11 @@ lp.CharacterAdded:Connect(function(char)
     UpdateKillerChance()
 end)
 
+UpdateNoFog()
 UpdateESP()
 UpdateESPExits()
 UpdateDoubleJump()
 UpdateKillerChance()
 UpdateRightContent()
 
-notif("VSTK V1.4", 3)
+notif("VSTK V1.4 loaded!", 3)
