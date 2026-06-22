@@ -2213,7 +2213,7 @@ function UpdateRightContent()
         end
         
         CreateLabel(aboutSection, "", Color3.fromRGB(50,50,50))
-        CreateLabel(aboutSection, "Credits: VuaN                 Test: Probka and Lysyy", TEXT_SECONDARY).TextSize = 10
+        CreateLabel(aboutSection, "Credits: VuaN                 Test: Probka(SACR1F1C3) and Lysyy", TEXT_SECONDARY).TextSize = 12
 
     elseif CurrentTab == "  Player" then
         local movementSection = CreateSection(RightContent, "MOVEMENT")
