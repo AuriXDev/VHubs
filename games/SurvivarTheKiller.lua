@@ -62,7 +62,7 @@ LoadUserScripts()
 local more_scripts = {
     {
         name = "VSTK V1.4",
-        script = "loadstring(game:HttpGet('https://raw.githubusercontent.com/AuriXDev/VHubs/refs/heads/main/old/VSTK_V1_4.lua'))()"
+        script = "loadstring(game:HttpGet('https://raw.githubusercontent.com/AuriXDev/VHubs/refs/heads/main/old/STK_V1_4.lua'))()"
     },
     {
         name = "Infinite Yield",
