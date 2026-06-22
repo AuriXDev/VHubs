@@ -19,8 +19,12 @@ Main focus is **Windows 10–11**, but nearly every script will also have a **Mo
 
 ## ◆ Script Overview
 
-- **VHub** - universal script hub (versions 1.0 & 2.0 for Windows; 2.0 for Mobile)
-- **Survival The Killer** - dedicated script for the game *Survival The Killer* (both platforms)
+- **Survival The Killer** - dedicated script for the game *Survival The Killer* (coming soon on android)
+
+### ◆ In development
+
+- **VHub** - universal script hub (versions 1.0 & 2.0 for Windows and Android)
+- **FNAF: EXTERNAL NIGHT** - small script for FNAF:EN (Windows and Android)
 
 ---
 
@@ -39,7 +43,7 @@ Scripts have been verified to work with the following injectors:
 
 We are open to requests! If you want a script for a specific Roblox place, feel free to suggest it.
 
-**Please note:** Popular games like *MM2*, *Doors*, or *Blox Fruits* are **not** prioritised - there are already hundreds of existing scripts for them.
+**Please note:** Popular games like *MM2*, *Grow a garden*, or *Blox Fruits* are **not** prioritised - there are already hundreds of existing scripts for them.
 
 To make a suggestion, use the contact channels below.
 
