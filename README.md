@@ -10,7 +10,7 @@ Main focus is **Windows 10–11**, but nearly every script will also have a **Mo
 
 | Platform | Available Scripts               |
 |----------|---------------------------------|
-| Windows  | Survival The Killer |
+| Windows  | Survival The Killer V1.4 and V2 |
 | Mobile   |  |
 
 > ▶ **Important:** Mobile versions are **not** updated regularly. Exceptions are made only for critical fixes or to keep compatibility with game updates
